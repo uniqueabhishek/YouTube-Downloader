@@ -146,8 +146,7 @@ class YouTubeDownloader(QWidget):
             "quiet": True,
             "skip_download": True,
             "js_runtimes": {"node": {}},
-            "extractor_args": {"youtube": {"client_name": "mweb"}},
-            "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 10)"},
+            "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}},
             "socket_timeout": 30,
         }
         formats_list = []
@@ -618,8 +617,7 @@ class YouTubeDownloader(QWidget):
             "fragment_retries": 10,
             "max_retries": 3,
             "js_runtimes": {"node": {}},
-            "extractor_args": {"youtube": {"client_name": "mweb"}},
-            "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 10)"},
+            "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}},
             "socket_timeout": 30,
         }
 
