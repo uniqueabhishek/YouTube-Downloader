@@ -39,6 +39,7 @@ from queue_item import QueueItem, QueueStatus
 from queue_manager import QueueManager
 from smart_paste_utils import UrlLineEdit
 from theme import MAIN_STYLESHEET
+from update_thread import UpdateThread
 
 logger.add("downloader.log", rotation="500 KB")
 
@@ -111,6 +112,7 @@ class YouTubeDownloader(QWidget):
         # Queue manager handles all queue operations
         self.queue_manager: QueueManager | None = None  # Initialized in init_ui
         self.download_thread = None
+        self.update_thread = None
         self.downloading = False
 
         self.settings = QSettings("YouTubeDownloader", "Settings")
@@ -415,12 +417,22 @@ class YouTubeDownloader(QWidget):
             QSizePolicy.Expanding, QSizePolicy.Fixed)
         content_layout.addWidget(self.progress_bar)
 
-        # ---------------- Status Label ----------------
+        # ---------------- Status Label + Update Button ----------------
+        status_layout = QHBoxLayout()
+        status_layout.setSpacing(8)
         self.status_label = QLabel("⏸ Ready")
         self.status_label.setContentsMargins(5, 5, 5, 5)
         self.status_label.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Fixed)
-        content_layout.addWidget(self.status_label, 0)
+        status_layout.addWidget(self.status_label)
+
+        self.update_button = QPushButton("🔄 Update Downloader")
+        self.update_button.setObjectName("blueButton")
+        self.update_button.setFixedWidth(170)
+        self.update_button.setToolTip("Update yt-dlp to the latest version")
+        self.update_button.clicked.connect(self.update_ytdlp)
+        status_layout.addWidget(self.update_button)
+        content_layout.addLayout(status_layout)
 
         # ---------------- Drop Shadow Effects ----------------
         def add_shadow(widget, color=QColor(0, 0, 0, 100), blur=15, offset=(0, 5)):
@@ -500,6 +512,42 @@ class YouTubeDownloader(QWidget):
         self.tray_icon.hide()
         if event:
             event.accept()
+
+    # ----------------------- yt-dlp Update -----------------------
+    def update_ytdlp(self):
+        """Upgrade yt-dlp in the background (same step as Start_YTD.bat)."""
+        if self.downloading:
+            QMessageBox.information(
+                self, "Update", "Please wait until the current download finishes."
+            )
+            return
+        self.update_button.setEnabled(False)
+        self.status_label.setText("🔄 Checking for yt-dlp updates...")
+        self.update_thread = UpdateThread()
+        self.update_thread.update_finished.connect(self.update_finished)
+        self.update_thread.start()
+
+    def update_finished(self, success, old_version, new_version, error):
+        """Report the result of a yt-dlp update."""
+        self.update_button.setEnabled(True)
+        if not success:
+            logger.error(f"yt-dlp update failed: {error}")
+            self.status_label.setText("❌ Update failed")
+            QMessageBox.warning(
+                self, "Update Failed", f"Could not update yt-dlp:\n{error}"
+            )
+            return
+        if new_version == old_version:
+            self.status_label.setText(f"✅ yt-dlp is up to date ({new_version})")
+            return
+        logger.info(f"yt-dlp updated {old_version} -> {new_version}")
+        self.status_label.setText(f"✅ yt-dlp updated to {new_version}")
+        QMessageBox.information(
+            self,
+            "Update Complete",
+            f"yt-dlp updated from {old_version} to {new_version}.\n"
+            "Please close and reopen the app to use the new version.",
+        )
 
     # ----------------------- Folder Selection -----------------------
     def select_output_folder(self):
