@@ -41,7 +41,7 @@ from smart_paste_utils import UrlLineEdit
 from theme import MAIN_STYLESHEET
 from update_thread import UpdateThread
 
-logger.add("downloader.log", rotation="500 KB")
+logger.add("downloader.log", rotation="500 KB", retention=5)
 
 
 # class UrlLineEdit(QLineEdit, SmartPasteMixin):
@@ -147,6 +147,7 @@ class YouTubeDownloader(QWidget):
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
+            "noplaylist": True,  # watch?v=...&list=... means this video only
             "js_runtimes": {"node": {}},
             "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}},
             "socket_timeout": 30,
@@ -654,13 +655,15 @@ class YouTubeDownloader(QWidget):
             "outtmpl": os.path.join(self.output_folder, "%(title).200B.%(ext)s"),
             "restrictfilenames": True,  # Sanitize filenames to prevent path traversal
             "quiet": True,
-            "noprogress": False,  # enables the progress hooks
+            # progress_hooks still fire; this only stops progress lines in the log
+            "noprogress": True,
             # <-- directory only
             "ffmpeg_location": (
                 os.path.dirname(self.ffmpeg_path) if self.ffmpeg_path else None
             ),
             "logger": logger,
             "continuedl": True,
+            "noplaylist": True,  # watch?v=...&list=... means this video only
             "retries": 10,
             "fragment_retries": 10,
             "max_retries": 3,

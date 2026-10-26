@@ -27,6 +27,7 @@ class TitleFetchThread(QThread):
                 "quiet": True,
                 "skip_download": True,
                 "no_warnings": True,
+                "noplaylist": True,  # watch?v=...&list=... means this video only
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
