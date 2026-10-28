@@ -1,6 +1,6 @@
 """Custom queue item widget with clickable remove button."""
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget, QSizePolicy  # type: ignore
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget  # type: ignore
 
 
 class QueueItemWidget(QWidget):
