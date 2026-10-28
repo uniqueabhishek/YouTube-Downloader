@@ -35,6 +35,12 @@ from app_dir_creator import get_database_path, get_download_folder
 from database_handler import DatabaseManager, init_db
 from download_thread import DownloadThread
 from ffmpeg_utils import get_ffmpeg_path as find_ffmpeg
+from format_presets import (
+    DEFAULT_PRESET,
+    PRESETS,
+    build_format_opts,
+    estimate_size_mb,
+)
 from queue_item import QueueItem, QueueStatus
 from queue_manager import QueueManager
 from smart_paste_utils import UrlLineEdit
@@ -123,19 +129,7 @@ class YouTubeDownloader(QWidget):
         if saved_folder:
             self.output_folder = saved_folder
 
-        # -------------video + audio codec number defined here
-        # --------------------------Added the format mapping here
-        self.format_map = {
-            "Mp4-High (720p)": {"video": "136", "audio": "140"},
-            "Mp4-HD (1080p)": {"video": "137", "audio": "251"},
-            "Mkv-High (720p)": {"video": "247", "audio": "251"},
-            "Mkv-HD (1080p)": {"video": "248", "audio": "251"},
-            "WebM-High (720p)": {"video": "247", "audio": "251"},
-            "WebM-HD (1080p)": {"video": "248", "audio": "251"},
-            "Super High WebM": "bestvideo+bestaudio",
-            "Audio Only (MP3)": "bestaudio",
-        }
-        # -------------------------------------------
+        # Dropdown choices and their yt-dlp settings live in format_presets.py
 
         self.init_ui()
         self.init_tray()
@@ -152,45 +146,25 @@ class YouTubeDownloader(QWidget):
             "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}},
             "socket_timeout": 30,
         }
-        formats_list = []
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
                 info = ydl.extract_info(url, download=False)
                 if not info:
-                    return []
-                formats = info.get("formats", [])
-
-                for f in formats:  # type: ignore[union-attr]
-                    fmt_id = f["format_id"]
-                    ext = f["ext"]
-                    res = f.get("height") or "audio"
-
-                    # Calculate approximate size
-                    size = f.get("filesize") or f.get("filesize_approx")
-                    if not size:
-                        duration = f.get("duration")
-                        tbr = f.get("tbr")  # total bitrate in kbps
-                        if duration and tbr:
-                            size = (
-                                duration * tbr * 1000 / 8
-                            )  # convert kbps * sec → bytes
-
-                    # ensure numeric
-                    size_mb = round(size / (1024 * 1024), 1) if size else 0
-
-                    formats_list.append(
-                        {
-                            "format_id": fmt_id,
-                            "ext": ext,
-                            "resolution": res,
-                            "size_mb": size_mb,
-                        }
-                    )
+                    return [], None
+                return info.get("formats") or [], info.get("duration")
         except (yt_dlp.utils.DownloadError, KeyError, TypeError) as e:
             self.status_label.setText(f"Error fetching formats: {e}")
+            return [], None
 
-        return formats_list
+    def fill_format_dropdown(self, formats=None, duration=None):
+        """Fill the dropdown with every preset, plus a size estimate if known."""
+        self.format_quality_combo.clear()
+        for name in PRESETS:
+            size_mb = estimate_size_mb(name, formats or [], duration)
+            self.format_quality_combo.addItem(
+                f"{name} ~{size_mb} MB" if size_mb else name
+            )
+        self.format_quality_combo.setCurrentIndex(list(PRESETS).index(DEFAULT_PRESET))
 
     def update_format_dropdown(self):
         """Update the format dropdown with sizes for the current URL."""
@@ -198,57 +172,16 @@ class YouTubeDownloader(QWidget):
         if not url:
             return
 
-        self.format_quality_combo.clear()
-        formats_list = self.fetch_format_sizes(url)
+        previous = self.selected_preset()
+        formats, duration = self.fetch_format_sizes(url)
+        self.fill_format_dropdown(formats, duration)
+        # Keep the user's choice when sizes refresh for a new URL
+        if previous in PRESETS:
+            self.format_quality_combo.setCurrentIndex(list(PRESETS).index(previous))
 
-        for display_name, codes in self.format_map.items():
-            size_mb = 0
-
-            if isinstance(codes, dict) and "video" in codes:
-                match = next(
-                    (
-                        f
-                        for f in formats_list
-                        if str(f["format_id"]) == str(codes["video"])
-                    ),
-                    None,
-                )
-                if match:
-                    size_mb = match["size_mb"]
-
-            elif display_name == "Super High WebM":
-                largest = max(
-                    (f for f in formats_list if f.get("height")),
-                    key=lambda x: x["size_mb"]
-                    if isinstance(x["size_mb"], (int, float))
-                    else 0,
-                    default=None,
-                )
-                if largest:
-                    size_mb = largest["size_mb"]
-
-            elif display_name == "Audio Only (MP3)":
-                best_audio = max(
-                    (
-                        f
-                        for f in formats_list
-                        if str(f["resolution"]).lower() == "audio"
-                    ),
-                    key=lambda x: x["size_mb"]
-                    if isinstance(x["size_mb"], (int, float))
-                    else 0,
-                    default=None,
-                )
-                if best_audio:
-                    size_mb = best_audio["size_mb"]
-
-            # Show dropdown with size
-            display_text = (
-                f"{display_name} ~{size_mb} MB"
-                if size_mb
-                else f"{display_name}     ~Unknown"
-            )
-            self.format_quality_combo.addItem(display_text)
+    def selected_preset(self) -> str:
+        """Preset name currently chosen in the dropdown, without the size suffix."""
+        return self.format_quality_combo.currentText().split(" ~")[0]
 
     # ----------------------- GUI Setup -----------------------
     def init_ui(self):
@@ -338,11 +271,15 @@ class YouTubeDownloader(QWidget):
         format_layout.setSpacing(8)
 
         self.format_quality_combo = QComboBox()
-        self.format_quality_combo.addItem("🎬 Select Format")
-        self.format_quality_combo.setToolTip("Choose video quality and format")
+        self.format_quality_combo.setToolTip(
+            ".webm: AV1 video + Opus audio, smallest file for the quality.\n"
+            ".mp4: H.264 + AAC, opens in every player and editor (bigger).\n"
+            "Nothing is re-encoded except .mp3."
+        )
         self.format_quality_combo.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Fixed)
         format_layout.addWidget(self.format_quality_combo)
+        self.fill_format_dropdown()
 
         content_layout.addLayout(format_layout)
 
@@ -430,7 +367,7 @@ class YouTubeDownloader(QWidget):
         self.update_button = QPushButton("🔄 Update Downloader")
         self.update_button.setObjectName("blueButton")
         self.update_button.setFixedWidth(170)
-        self.update_button.setToolTip("Update yt-dlp to the latest version")
+        self.update_button.setToolTip("Update yt-dlp, FFmpeg and the app's libraries")
         self.update_button.clicked.connect(self.update_ytdlp)
         status_layout.addWidget(self.update_button)
         content_layout.addLayout(status_layout)
@@ -523,31 +460,33 @@ class YouTubeDownloader(QWidget):
             )
             return
         self.update_button.setEnabled(False)
-        self.status_label.setText("🔄 Checking for yt-dlp updates...")
+        self.status_label.setText("🔄 Checking for updates...")
         self.update_thread = UpdateThread()
+        self.update_thread.status.connect(self.status_label.setText)
         self.update_thread.update_finished.connect(self.update_finished)
         self.update_thread.start()
 
-    def update_finished(self, success, old_version, new_version, error):
-        """Report the result of a yt-dlp update."""
+    def update_finished(self, success, changes, error):
+        """Report the result of a library + FFmpeg update."""
         self.update_button.setEnabled(True)
         if not success:
-            logger.error(f"yt-dlp update failed: {error}")
+            logger.error(f"Update failed: {error}")
             self.status_label.setText("❌ Update failed")
             QMessageBox.warning(
-                self, "Update Failed", f"Could not update yt-dlp:\n{error}"
+                self,
+                "Update Failed",
+                f"Could not update. The previous version is kept.\n\n{error}",
             )
             return
-        if new_version == old_version:
-            self.status_label.setText(f"✅ yt-dlp is up to date ({new_version})")
+        if not changes:
+            self.status_label.setText("✅ Everything is up to date")
             return
-        logger.info(f"yt-dlp updated {old_version} -> {new_version}")
-        self.status_label.setText(f"✅ yt-dlp updated to {new_version}")
+        logger.info(f"Updated: {changes!r}")
+        self.status_label.setText("✅ Updated - restart the app")
         QMessageBox.information(
             self,
             "Update Complete",
-            f"yt-dlp updated from {old_version} to {new_version}.\n"
-            "Please close and reopen the app to use the new version.",
+            f"{changes}\n\nPlease close and reopen the app to use the new versions.",
         )
 
     # ----------------------- Folder Selection -----------------------
@@ -588,16 +527,11 @@ class YouTubeDownloader(QWidget):
             )
             return
 
-        # Get current format selection
-        selected_format = self.format_quality_combo.currentText()
-        if selected_format.startswith("🎬"):
-            selected_format = ""
-
-        # Create queue item
+        # Create queue item; it keeps the format chosen now, not at download time
         queue_item = QueueItem(
             url=url,
             title="Fetching title...",
-            format_selection=selected_format,
+            format_selection=self.selected_preset(),
             status=QueueStatus.WAITING
         )
 
@@ -634,11 +568,6 @@ class YouTubeDownloader(QWidget):
             f"Status: Downloading {queue_item.title or url}")
         self.downloading = True
 
-        # --- Use new combined dropdown ---
-        selected_item = self.format_quality_combo.currentText()
-        if "~" in selected_item:
-            selected_item = selected_item.split(" ~")[0]  # remove size suffix
-
         # Lazy-load FFmpeg on first download (speeds up app startup)
         if not self.ffmpeg_path:
             self.ffmpeg_path = find_ffmpeg()
@@ -648,7 +577,7 @@ class YouTubeDownloader(QWidget):
                 self,
                 "FFmpeg Missing",
                 "FFmpeg codec not found.\n"
-                "Please click 'Update FFmpeg Codec' to download it.",
+                "Please click 'Update Downloader' to download it.",
             )
 
         ydl_opts = {
@@ -672,28 +601,8 @@ class YouTubeDownloader(QWidget):
             "socket_timeout": 30,
         }
 
-        # --- Map selection to yt-dlp format codes ---
-        if selected_item == "Super High WebM":
-            ydl_opts["format"] = "bestvideo+bestaudio/best"
-        elif selected_item == "Audio Only (MP3)":
-            ydl_opts["format"] = "bestaudio/best"
-            ydl_opts["postprocessors"] = [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ]
-        else:
-            # Use quality-based selection instead of hardcoded format codes
-            if "1080p" in selected_item:
-                fmt = "bestvideo[height<=1080]+bestaudio"
-                ydl_opts["format"] = f"{fmt}/best[height<=1080]"
-            elif "720p" in selected_item:
-                fmt = "bestvideo[height<=720]+bestaudio"
-                ydl_opts["format"] = f"{fmt}/best[height<=720]"
-            else:
-                ydl_opts["format"] = "bestvideo+bestaudio/best"
+        # Format chosen when the item was queued (unknown names -> default preset)
+        ydl_opts.update(build_format_opts(queue_item.format_selection))
 
         # Start download thread
         self.download_thread = DownloadThread(url, ydl_opts)
